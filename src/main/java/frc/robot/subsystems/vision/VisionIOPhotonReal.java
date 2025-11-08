@@ -122,6 +122,10 @@ public class VisionIOPhotonReal implements VisionIO {
 							target.getBestCameraToTarget().getTranslation().getNorm(),
 							new Rotation2d(target.getYaw()),
 							new Rotation2d(target.getPitch()));
+
+					// Store camera-to-tag transform for calibration (if needed)
+					// This is accessible via target.getBestCameraToTarget() but we store it
+					// in a way that can be accessed during calibration
 				}
 			}
 		}

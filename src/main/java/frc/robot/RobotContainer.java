@@ -1,71 +1,30 @@
 
 package frc.robot;
 
-import java.io.IOException;
-
-import org.json.simple.parser.ParseException;
 import org.littletonrobotics.junction.networktables.LoggedDashboardChooser;
 
-import com.fasterxml.jackson.databind.util.internal.PrivateMaxEntriesMap;
 import com.pathplanner.lib.auto.AutoBuilder;
-import com.pathplanner.lib.auto.NamedCommands;
-import com.pathplanner.lib.commands.PathPlannerAuto;
-import com.pathplanner.lib.path.PathPlannerPath;
-import com.pathplanner.lib.util.FileVersionException;
 
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
-import edu.wpi.first.math.geometry.Transform2d;
-import edu.wpi.first.math.util.Units;
-import edu.wpi.first.wpilibj.DriverStation;
-import edu.wpi.first.wpilibj.DriverStation.Alliance;
-import edu.wpi.first.wpilibj.Joystick;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.Commands;
-import edu.wpi.first.wpilibj2.command.ParallelCommandGroup;
-import edu.wpi.first.wpilibj2.command.SequentialCommandGroup;
-import edu.wpi.first.wpilibj2.command.WaitCommand;
 import edu.wpi.first.wpilibj2.command.button.CommandXboxController;
-import edu.wpi.first.wpilibj2.command.button.JoystickButton;
 import frc.robot.commands.*;
 import frc.robot.subsystems.drive.*;
-import frc.robot.subsystems.elevator.*;
-import frc.robot.subsystems.elevator.Elevator.ElevatorState;
-import frc.robot.subsystems.ball.*;
-import frc.robot.subsystems.ball.Ball.BallState;
-// import frc.robot.subsystems.pivot.*;
-// import frc.robot.subsystems.pivot.Pivot.PivotState;
 import frc.robot.subsystems.vision.*;
+
+// NOTE: Fusion subsystem is intentionally commented out/not included
+// All fusion code is in frc.robot.subsystems.fusion package but not used here
+// To enable fusion, uncomment and add fusion imports/initialization below
 
 public class RobotContainer {
 	private final Drive drive;
-	// private final Climb climb;
-	private final Elevator elevator;
-	private final Ball ball;
-
-	// private final Pivot pivot;
 	private final VisionLocalizer vision;
+	private final TagFieldCalibrator fieldCalibrator;
 
 	private final CommandXboxController controller = new CommandXboxController(0);
-	public static final Joystick operatorControl = new Joystick(Constants.OperatorConstants.OPERATOR_CONTROLLER_PORT);
 	private final LoggedDashboardChooser<Command> autoChooser;
-
-	public static final JoystickButton BUTTON_1 = new JoystickButton(operatorControl, 1),
-			BUTTON_2 = new JoystickButton(operatorControl, 2),
-			BUTTON_3 = new JoystickButton(operatorControl, 3),
-			BUTTON_4 = new JoystickButton(operatorControl, 4),
-			BUTTON_5 = new JoystickButton(operatorControl, 5),
-			BUTTON_6 = new JoystickButton(operatorControl, 6),
-			BUTTON_7 = new JoystickButton(operatorControl, 7),
-			BUTTON_8 = new JoystickButton(operatorControl, 8),
-			BUTTON_9 = new JoystickButton(operatorControl, 9),
-			BUTTON_10 = new JoystickButton(operatorControl, 10),
-			BUTTON_11 = new JoystickButton(operatorControl, 11),
-			BUTTON_12 = new JoystickButton(operatorControl, 12),
-			BUTTON_13 = new JoystickButton(operatorControl, 13),
-			BUTTON_14 = new JoystickButton(operatorControl, 14),
-			BUTTON_15 = new JoystickButton(operatorControl, 15),
-			BUTTON_16 = new JoystickButton(operatorControl, 16);
 
 	public RobotContainer() {
 		switch (Constants.currentMode) {
@@ -76,14 +35,14 @@ public class RobotContainer {
 						new ModuleIOTalonFX(TunerConstants.FrontRight),
 						new ModuleIOTalonFX(TunerConstants.BackLeft),
 						new ModuleIOTalonFX(TunerConstants.BackRight));
-				// climb = new Climb(new ClimbIOReal());
-				elevator = new Elevator(new ElevatorIOReal());
-				ball = new Ball(new BallIOReal());
-
-				// pivot = new Pivot(new PivotIOReal());
+				// Vision automatically uses AprilTag field layout - no manual dimensions
+				// needed!
+				// Cameras detect tags and calculate robot pose automatically
 				vision = new VisionLocalizer(drive::addVisionMeasurement, drive,
-						new VisionIOPhotonReal(VisionConstants.cameraNames[0], VisionConstants.vehicleToCameras[0]),
-						new VisionIOPhotonReal(VisionConstants.cameraNames[1], VisionConstants.vehicleToCameras[1]));
+						new VisionIOPhotonReal(VisionConstants.cameraNames[0],
+								VisionConstants.vehicleToCameras[0]),
+						new VisionIOPhotonReal(VisionConstants.cameraNames[1],
+								VisionConstants.vehicleToCameras[1]));
 				break;
 
 			case SIM:
@@ -94,11 +53,9 @@ public class RobotContainer {
 						new ModuleIOSim(TunerConstants.FrontRight),
 						new ModuleIOSim(TunerConstants.BackLeft),
 						new ModuleIOSim(TunerConstants.BackRight));
-				// climb = new Climb(new ClimbIOSim());
-				elevator = new Elevator(new ElevatorIOSim());
-				ball = new Ball(new BallIOSim());
-
-				// pivot = new Pivot(new PivotIOSim());
+				// Vision automatically uses AprilTag field layout - no manual dimensions
+				// needed!
+				// Cameras detect tags and calculate robot pose automatically
 				vision = new VisionLocalizer(
 						drive::addVisionMeasurement,
 						drive,
@@ -121,18 +78,64 @@ public class RobotContainer {
 						},
 						new ModuleIO() {
 						});
-				// climb = new Climb(new ClimbIO() {});
-				elevator = new Elevator(new ElevatorIO() {
-				});
-				ball = new Ball(new BallIO() {
-				});
-
-				// pivot = new Pivot(new PivotIO() {});
+				// Vision automatically uses AprilTag field layout - no manual dimensions
+				// needed!
 				vision = new VisionLocalizer(drive::addVisionMeasurement, drive, new VisionIO() {
 				});
 		}
 
+		// Vision automatically sends pose corrections to drive subsystem
 		vision.setVisionConsumer(drive::addVisionMeasurement);
+
+		// Create field calibrator for custom field layouts
+		// This allows the robot to adapt to ANY field configuration!
+		fieldCalibrator = new TagFieldCalibrator(drive, vision);
+		vision.setCalibrator(fieldCalibrator);
+
+		// ===================================================================
+		// HOW ROBOT POSITION TRACKING WORKS (Automatic AprilTag Localization)
+		// ===================================================================
+		//
+		// The robot finds its position through multiple sensor layers:
+		//
+		// LAYER 1: WHEEL ODOMETRY (Active)
+		// - How it works: Integrates wheel encoder positions + gyro angle
+		// - Update rate: 250 Hz (very fast, continuous)
+		// - Accuracy: Good for short distances, drifts over time
+		// - Purpose: Provides smooth, continuous tracking between vision updates
+		// - View in AdvantageKit: Check "Odometry/Layer1_WheelOdometry"
+		//
+		// LAYER 2: VISION LOCALIZATION (Active - Automatic!)
+		// - How it works: Cameras detect AprilTags and automatically calculate pose
+		// - NO MANUAL DIMENSIONS NEEDED! Uses pre-loaded 2025 field layout
+		// - The system knows where all AprilTags are on the field automatically
+		// - When cameras see tags, they calculate robot position using:
+		// * Known tag positions (from AprilTagFieldLayout)
+		// * Camera-to-tag distance and angles
+		// * Camera mounting positions on robot
+		// - Update rate: ~20 Hz (when tags are visible)
+		// - Accuracy: Very accurate, corrects Layer 1 drift automatically
+		// - View in AdvantageKit: Check "Odometry/Layer2_VisionPose"
+		//
+		// HOW IT WORKS AUTOMATICALLY:
+		// 1. VisionConstants.aprilTagLayout loads the 2025 field with all tag positions
+		// 2. Cameras detect AprilTags and identify them (tag ID)
+		// 3. System looks up tag position from field layout
+		// 4. Calculates robot pose using camera-to-tag geometry
+		// 5. Sends corrections to drive subsystem automatically
+		// - NO manual typing of dimensions needed!
+		//
+		// CURRENT SETUP:
+		// - Layer 1 (wheel odometry) + Layer 2 (vision) both active
+		// - Robot starts at (3.181, 3.960) - manually set initial position
+		// - Once vision sees tags, it will automatically correct any drift
+		// - The two cameras (FL and FR) look over the field for tags
+		//
+		// ===================================================================
+
+		// Initialize robot pose at starting position
+		// Comment out this line to start at blue alliance origin (0, 0)
+		drive.setPose(new Pose2d(3.181, 3.960, new Rotation2d()));
 
 		// ... NamedCommands registration (unchanged)
 
@@ -153,72 +156,42 @@ public class RobotContainer {
 						() -> -controller.getLeftX() * 0.5, // Reduced speed to 50%
 						() -> -controller.getRightX() * 0.5)); // Reduced speed to 50%
 
-		// Commented out drive pose reset to use for elevator control
-		// controller
-		// .rightBumper()
-		// .onTrue(
-		// Commands.runOnce(
-		// () -> drive.setPose(
-		// new Pose2d(drive.getPose().getTranslation(), new Rotation2d())),
-		// drive)
-		// .ignoringDisable(true));
+		// Drive pose reset
+		controller.rightBumper().onTrue(
+				Commands.runOnce(
+						() -> drive.setPose(
+								new Pose2d(drive.getPose().getTranslation(), new Rotation2d())),
+						drive)
+						.ignoringDisable(true));
 
-		// Xbox Controller Elevator Position Controls
-		// X button - Home position (0)
-		controller.x().onTrue(
-				Commands.parallel(
-						elevator.setTargetPos(ElevatorConstants.ELEVATOR_HOME_POSITION),
-						elevator.setState(Elevator.ElevatorState.ELEVATOR_HOME_POSITION)));
+		// Field calibration controls
+		// Y button - Start calibration (drive around to collect tag positions)
+		controller.y().onTrue(Commands.runOnce(() -> {
+			fieldCalibrator.startCalibration();
+			System.out.println("Field calibration started! Drive around to collect tag positions.");
+		}));
 
-		// D-Pad Up - Level 1 position (3.5)
-		controller.povUp().onTrue(
-				Commands.parallel(
-						elevator.setTargetPos(ElevatorConstants.LEVEL_1_POSITION),
-						elevator.setState(Elevator.ElevatorState.LEVEL_1_POSITION)));
-
-		// D-Pad Right - Level 2 position (8)
-		controller.povRight().onTrue(
-				Commands.parallel(
-						elevator.setTargetPos(ElevatorConstants.LEVEL_2_POSITION),
-						elevator.setState(Elevator.ElevatorState.LEVEL_2_POSITION)));
-
-		// D-Pad Down - Level 3 position (16)
-		controller.povDown().onTrue(
-				Commands.parallel(
-						elevator.setTargetPos(ElevatorConstants.LEVEL_3_POSITION),
-						elevator.setState(Elevator.ElevatorState.LEVEL_3_POSITION)));
-
-		// D-Pad Left - Level 4 position (28)
-		controller.povLeft().onTrue(
-				Commands.parallel(
-						elevator.setTargetPos(ElevatorConstants.LEVEL_4_POSITION),
-						elevator.setState(Elevator.ElevatorState.LEVEL_4_POSITION)));
-
-		// Manual Elevator Controls - Triggers
-		// Right trigger - Elevator Up (while held)
-		controller.rightTrigger().whileTrue(elevator.runUp());
-
-		// Left trigger - Elevator Down (while held)
-		controller.leftTrigger().whileTrue(elevator.runDown());
-
-		// Ball Controls - Bumpers
-		// Right bumper - Intake (while held)
-		controller.rightBumper().whileTrue(ball.intake());
-
-		// Left bumper - Outtake (while held)
-		controller.leftBumper().whileTrue(ball.outtake());
-
-		// Manual Elevator Controls - Operator Control Board (commented out)
-		// Button 1 - Elevator Up (while held)
-		// BUTTON_1.whileTrue(elevator.runUp());
-
-		// Button 2 - Elevator Down (while held)
-		// BUTTON_2.whileTrue(elevator.runDown());
+		// B button - Finish calibration (builds custom field layout)
+		controller.b().onTrue(Commands.runOnce(() -> {
+			boolean success = fieldCalibrator.finishCalibration();
+			if (success) {
+				fieldCalibrator.getCustomLayout().ifPresent(layout -> {
+					VisionConstants.setCustomLayout(layout);
+					vision.updateFieldLayout();
+					System.out.println("Field calibration complete! Custom layout is now active.");
+				});
+			} else {
+				System.out.println("Calibration failed - not enough observations collected.");
+			}
+		}));
 	}
 
 	public void teleopInit() {
-		// Initialize subsystems for teleop mode
-		// Since intake was removed, we don't need to set its state
-		// pivot.setTargetPos(PivotConstants.POSITION_1);
+		// Zero heading so forward on stick maps to straight field-forward
+		drive.setPose(new Pose2d(drive.getPose().getTranslation(), new Rotation2d()));
+	}
+
+	public Command getAutonomousCommand() {
+		return autoChooser.get();
 	}
 }

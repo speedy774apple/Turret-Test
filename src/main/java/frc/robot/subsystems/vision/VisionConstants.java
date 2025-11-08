@@ -36,6 +36,37 @@ public final class VisionConstants {
 			new CameraParams(cameraNames[1], vehicleToCameras[1]));
 
 	// Field Layout for visual localization and map generation
+	// Default: Standard 2025 FRC field
+	// Can be replaced with custom layout from TagFieldCalibrator
 	public static AprilTagFieldLayout aprilTagLayout = AprilTagFieldLayout
 			.loadField(AprilTagFields.k2025ReefscapeAndyMark);
+
+	// Custom field layout (set by TagFieldCalibrator after calibration)
+	private static AprilTagFieldLayout customLayout = null;
+
+	/**
+	 * Sets a custom field layout (from calibration).
+	 * 
+	 * @param layout
+	 *            Custom AprilTag field layout
+	 */
+	public static void setCustomLayout(AprilTagFieldLayout layout) {
+		customLayout = layout;
+	}
+
+	/**
+	 * Gets the active field layout (custom if available, otherwise standard).
+	 * 
+	 * @return Active field layout
+	 */
+	public static AprilTagFieldLayout getActiveLayout() {
+		return customLayout != null ? customLayout : aprilTagLayout;
+	}
+
+	/**
+	 * Resets to standard field layout.
+	 */
+	public static void resetToStandardLayout() {
+		customLayout = null;
+	}
 }

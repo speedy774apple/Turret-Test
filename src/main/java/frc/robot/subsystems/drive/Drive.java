@@ -210,6 +210,8 @@ public class Drive extends SubsystemBase {
 		// Update odometry
 		double[] sampleTimestamps = modules[0].getOdometryTimestamps(); // All signals are sampled together
 		int sampleCount = sampleTimestamps.length;
+		SwerveModulePosition[] currentModulePositions = getModulePositions(); // Get current positions for logging
+
 		for (int i = 0; i < sampleCount; i++) {
 			// Read wheel positions and deltas from each module
 			SwerveModulePosition[] modulePositions = new SwerveModulePosition[4];
@@ -236,6 +238,18 @@ public class Drive extends SubsystemBase {
 			// Apply update
 			poseEstimator.updateWithTime(sampleTimestamps[i], rawGyroRotation, modulePositions);
 		}
+
+		// Log odometry diagnostics for layer testing
+		// This helps you see what Layer 1 (Wheel Odometry) is doing
+		Logger.recordOutput("Odometry/Layer1_WheelOdometry", getPose());
+		Logger.recordOutput("Odometry/Layer1_GyroAngle", rawGyroRotation.getDegrees());
+		Logger.recordOutput("Odometry/Layer1_ModulePositions", currentModulePositions);
+
+		// Log if vision corrections are being applied (Layer 2)
+		// This tracks when vision measurements are actually received
+		// Note: This is set to true in addVisionMeasurement() when vision sends
+		// corrections
+		Logger.recordOutput("Odometry/Layer2_VisionActive", false); // Updated in addVisionMeasurement()
 
 		// Update gyro alert
 		gyroDisconnectedAlert.set(!gyroInputs.connected && Constants.currentMode != Mode.SIM);
@@ -379,6 +393,36 @@ public class Drive extends SubsystemBase {
 			Pose2d visionRobotPoseMeters,
 			double timestampSeconds,
 			Matrix<N3, N1> visionMeasurementStdDevs) {
+		// Get current pose from odometry
+		Pose2d currentPose = getPose();
+
+		// Validate vision measurement - reject if too different from current pose
+		// This prevents sudden jumps/inversions that cause driving issues
+		double positionDifference = visionRobotPoseMeters.getTranslation()
+				.getDistance(currentPose.getTranslation());
+		double angleDifference = Math.abs(visionRobotPoseMeters.getRotation()
+				.minus(currentPose.getRotation()).getRadians());
+
+		// Maximum allowed difference (adjust these thresholds as needed)
+		double MAX_POSITION_DIFFERENCE = 1.5; // meters - reject if vision says robot moved >1.5m
+		double MAX_ANGLE_DIFFERENCE = Math.PI / 3; // ~60 degrees - reject if angle changed >60°
+
+		// Reject measurements that are too different (likely bad detections)
+		if (positionDifference > MAX_POSITION_DIFFERENCE || angleDifference > MAX_ANGLE_DIFFERENCE) {
+			Logger.recordOutput("Odometry/Layer2_VisionRejected", true);
+			Logger.recordOutput("Odometry/Layer2_VisionRejectionReason",
+					"Too different from odometry: pos=" + positionDifference + "m, angle=" + angleDifference);
+			return; // Don't apply this measurement
+		}
+
+		// Log vision measurements for Layer 2 testing
+		Logger.recordOutput("Odometry/Layer2_VisionActive", true);
+		Logger.recordOutput("Odometry/Layer2_VisionPose", visionRobotPoseMeters);
+		Logger.recordOutput("Odometry/Layer2_VisionTimestamp", timestampSeconds);
+		Logger.recordOutput("Odometry/Layer2_VisionRejected", false);
+		Logger.recordOutput("Odometry/Layer2_PositionDifference", positionDifference);
+		Logger.recordOutput("Odometry/Layer2_AngleDifference", Math.toDegrees(angleDifference));
+
 		poseEstimator.addVisionMeasurement(
 				visionRobotPoseMeters, timestampSeconds, visionMeasurementStdDevs);
 	}

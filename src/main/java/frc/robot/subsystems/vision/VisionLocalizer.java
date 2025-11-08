@@ -6,6 +6,9 @@ import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Pose3d;
 import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.geometry.Rotation3d;
+import edu.wpi.first.math.geometry.Transform3d;
+import edu.wpi.first.math.geometry.Translation3d;
 import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
 import edu.wpi.first.math.util.Units;
@@ -34,11 +37,15 @@ public class VisionLocalizer extends SubsystemBase {
 	private Drive drive;
 	// private double[] cameraStdDevFactors;
 
+	// Optional calibrator for custom field layouts
+	private TagFieldCalibrator calibrator = null;
+
 	/**
 	 * Constructs a new VisionLocalizer instance
 	 *
 	 * @param consumer
-	 *            functional interface responsible for adding vision measurements to
+	 *            functional interface responsible for
+	 *            vision measurements to
 	 *            drive pose
 	 * @param aprilTagLayout
 	 *            the field layout for current year
@@ -57,8 +64,9 @@ public class VisionLocalizer extends SubsystemBase {
 		this.drive = drive;
 		// this.cameraStdDevFactors = cameraStdDevFactors;
 
+		// Use active layout (custom if available, otherwise standard)
 		for (int i = 0; i < io.length; i++) {
-			io[i].setAprilTagLayout(VisionConstants.aprilTagLayout);
+			io[i].setAprilTagLayout(VisionConstants.getActiveLayout());
 		}
 
 		// Initialize inputs
@@ -154,6 +162,47 @@ public class VisionLocalizer extends SubsystemBase {
 			List<Pose3d> robotPosesAccepted = new LinkedList<>();
 			List<Pose3d> robotPosesRejected = new LinkedList<>();
 
+			// Collect tag observations for calibration
+			// During calibration, we use robot odometry pose (trusted) + camera
+			// measurements
+			// to calculate absolute tag positions
+			if (calibrator != null && calibrator.isCalibrating()) {
+				// Get robot pose from odometry (more reliable than vision during calibration)
+				Pose3d robotPoseOdometry = new Pose3d(drive.getPose());
+
+				// Get camera-to-robot transform for this camera
+				Transform3d robotToCamera = VisionConstants.vehicleToCameras[cameraIndex];
+
+				// Process single tag observations for calibration
+				VisionIO.SingleTagObservation singleTag = inputs[cameraIndex].latestSingleTagObservation;
+				if (singleTag.tagId() > 0 && singleTag.distance3D() > 0) {
+					// Calculate camera-to-tag transform from observation
+					// We have: distance, angles (tx, ty)
+					// Build transform: distance in direction of angles
+					double distance = singleTag.distance3D();
+					double tx = singleTag.tx().getRadians();
+					double ty = singleTag.ty().getRadians();
+
+					// Calculate tag position relative to camera
+					// Using spherical to cartesian conversion
+					double x = distance * Math.cos(ty) * Math.cos(tx);
+					double y = distance * Math.cos(ty) * Math.sin(tx);
+					double z = distance * Math.sin(ty);
+
+					Transform3d cameraToTag = new Transform3d(
+							new Translation3d(x, y, z),
+							new Rotation3d(0, ty, tx) // Simplified rotation
+					);
+
+					// Calculate absolute tag position:
+					// tag_absolute = robot_absolute + robot_to_camera + camera_to_tag
+					Pose3d tagPose = robotPoseOdometry.transformBy(robotToCamera).transformBy(cameraToTag);
+
+					// Record observation
+					calibrator.recordObservation(singleTag.tagId(), robotPoseOdometry, tagPose);
+				}
+			}
+
 			for (VisionIO.PoseObservation observation : inputs[cameraIndex].poseObservations) {
 				robotPoses.add(observation.pose());
 				if (shouldRejectPose(observation)) {
@@ -181,6 +230,26 @@ public class VisionLocalizer extends SubsystemBase {
 	/** sets a VisionConsumer for the vision to send estimates to */
 	public void setVisionConsumer(VisionConsumer consumer) {
 		this.consumer = consumer;
+	}
+
+	/**
+	 * Sets the tag field calibrator for custom field layouts.
+	 * 
+	 * @param calibrator
+	 *            Calibrator instance (can be null)
+	 */
+	public void setCalibrator(TagFieldCalibrator calibrator) {
+		this.calibrator = calibrator;
+	}
+
+	/**
+	 * Updates the field layout (called after calibration completes).
+	 */
+	public void updateFieldLayout() {
+		// Update all cameras with new layout
+		for (int i = 0; i < io.length; i++) {
+			io[i].setAprilTagLayout(VisionConstants.getActiveLayout());
+		}
 	}
 
 	/***
@@ -220,6 +289,8 @@ public class VisionLocalizer extends SubsystemBase {
 			VisionIO.PoseObservation observation, int cameraIndex) {
 		double avgDistanceFromTarget = observation.averageTagDistance();
 		int numTags = observation.tagCount();
+
+		// Base uncertainty calculation
 		double linearStdDev = 0.02
 				* Math.pow(avgDistanceFromTarget, 2)
 				/ numTags;
@@ -227,11 +298,20 @@ public class VisionLocalizer extends SubsystemBase {
 				* Math.pow(avgDistanceFromTarget, 2)
 				/ numTags;
 
-		// adjustment based on position of camera
-		// if (cameraIndex < this.cameraStdDevFactors.length) {
-		// linearStdDev *= this.cameraStdDevFactors[cameraIndex];
-		// angularStdDev *= this.cameraStdDevFactors[cameraIndex];
-		// }
+		// Increase uncertainty for single tags (they're less reliable)
+		// Single tags can have ambiguity issues, so we trust them less
+		if (numTags == 1) {
+			linearStdDev *= 2.0; // Double uncertainty for single tags
+			angularStdDev *= 2.5; // Even more uncertainty for angle with single tags
+		}
+
+		// Ensure minimum uncertainty (don't trust vision too much)
+		linearStdDev = Math.max(linearStdDev, 0.05); // At least 5cm uncertainty
+		angularStdDev = Math.max(angularStdDev, 0.05); // At least 0.05 rad (~3°) uncertainty
+
+		// Cap maximum uncertainty (don't make it useless)
+		linearStdDev = Math.min(linearStdDev, 0.5); // Max 50cm uncertainty
+		angularStdDev = Math.min(angularStdDev, 0.3); // Max 0.3 rad (~17°) uncertainty
 
 		return VecBuilder.fill(linearStdDev, linearStdDev, angularStdDev);
 	}

@@ -26,6 +26,7 @@ import edu.wpi.first.math.util.Units;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.DriverStation.Alliance;
 import edu.wpi.first.wpilibj.Timer;
+import edu.wpi.first.wpilibj.RobotBase;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.Commands;
 import frc.robot.subsystems.drive.Drive;
@@ -53,17 +54,16 @@ public class AkitDriveCommands {
 	}
 
 	private static Translation2d getLinearVelocityFromJoysticks(double x, double y) {
-		// Apply deadband
-		double linearMagnitude = MathUtil.applyDeadband(Math.hypot(x, y), DEADBAND);
-		Rotation2d linearDirection = new Rotation2d(Math.atan2(y, x));
+		// Apply deadband to each axis independently to avoid unintended diagonal drift
+		double xProcessed = MathUtil.applyDeadband(x, DEADBAND);
+		double yProcessed = MathUtil.applyDeadband(y, DEADBAND);
 
-		// Square magnitude for more precise control
-		linearMagnitude = linearMagnitude * linearMagnitude;
+		// Square for finer low-speed control while preserving sign
+		xProcessed = Math.copySign(xProcessed * xProcessed, xProcessed);
+		yProcessed = Math.copySign(yProcessed * yProcessed, yProcessed);
 
-		// Return new linear velocity
-		return new Pose2d(new Translation2d(), linearDirection)
-				.transformBy(new Transform2d(linearMagnitude, 0.0, new Rotation2d()))
-				.getTranslation();
+		// Return Cartesian translation directly
+		return new Translation2d(xProcessed, yProcessed);
 	}
 
 	/**
@@ -93,7 +93,8 @@ public class AkitDriveCommands {
 							linearVelocity.getY() * drive.getMaxLinearSpeedMetersPerSec(),
 							omega * drive.getMaxAngularSpeedRadPerSec());
 					boolean isFlipped = DriverStation.getAlliance().isPresent()
-							&& DriverStation.getAlliance().get() == Alliance.Red;
+							&& DriverStation.getAlliance().get() == Alliance.Red
+							&& !RobotBase.isSimulation();
 					drive.runVelocity(
 							ChassisSpeeds.fromFieldRelativeSpeeds(
 									speeds,
@@ -142,7 +143,8 @@ public class AkitDriveCommands {
 							linearVelocity.getY() * drive.getMaxLinearSpeedMetersPerSec(),
 							omega);
 					boolean isFlipped = DriverStation.getAlliance().isPresent()
-							&& DriverStation.getAlliance().get() == Alliance.Red;
+							&& DriverStation.getAlliance().get() == Alliance.Red
+							&& !RobotBase.isSimulation();
 					drive.runVelocity(
 							ChassisSpeeds.fromFieldRelativeSpeeds(
 									speeds,
