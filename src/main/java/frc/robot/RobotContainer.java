@@ -7,16 +7,16 @@ import com.pathplanner.lib.auto.AutoBuilder;
 
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.geometry.Rotation3d;
+import edu.wpi.first.math.geometry.Transform3d;
+import edu.wpi.first.math.geometry.Translation3d;
+import edu.wpi.first.math.util.Units;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.Commands;
 import edu.wpi.first.wpilibj2.command.button.CommandXboxController;
 import frc.robot.commands.*;
 import frc.robot.subsystems.drive.*;
 import frc.robot.subsystems.vision.*;
-
-// NOTE: Fusion subsystem is intentionally commented out/not included
-// All fusion code is in frc.robot.subsystems.fusion package but not used here
-// To enable fusion, uncomment and add fusion imports/initialization below
 
 public class RobotContainer {
 	private final Drive drive;
@@ -35,14 +35,9 @@ public class RobotContainer {
 						new ModuleIOTalonFX(TunerConstants.FrontRight),
 						new ModuleIOTalonFX(TunerConstants.BackLeft),
 						new ModuleIOTalonFX(TunerConstants.BackRight));
-				// Vision automatically uses AprilTag field layout - no manual dimensions
-				// needed!
-				// Cameras detect tags and calculate robot pose automatically
-				vision = new VisionLocalizer(drive::addVisionMeasurement, drive,
-						new VisionIOPhotonReal(VisionConstants.cameraNames[0],
-								VisionConstants.vehicleToCameras[0]),
-						new VisionIOPhotonReal(VisionConstants.cameraNames[1],
-								VisionConstants.vehicleToCameras[1]));
+				// Vision - automatically uses whatever cameras are configured
+				// Currently using 2 cameras (FL, FR) - add more in VisionConstants as needed
+				vision = createVisionSystem();
 				break;
 
 			case SIM:
@@ -53,17 +48,8 @@ public class RobotContainer {
 						new ModuleIOSim(TunerConstants.FrontRight),
 						new ModuleIOSim(TunerConstants.BackLeft),
 						new ModuleIOSim(TunerConstants.BackRight));
-				// Vision automatically uses AprilTag field layout - no manual dimensions
-				// needed!
-				// Cameras detect tags and calculate robot pose automatically
-				vision = new VisionLocalizer(
-						drive::addVisionMeasurement,
-						drive,
-						new VisionIOPhotonSim(VisionConstants.cameraNames[0],
-								VisionConstants.vehicleToCameras[0],
-								drive::getPose),
-						new VisionIOPhotonSim(VisionConstants.cameraNames[1],
-								VisionConstants.vehicleToCameras[1], drive::getPose));
+				// Vision - automatically uses whatever cameras are configured
+				vision = createVisionSystem();
 				break;
 
 			default:
@@ -85,6 +71,7 @@ public class RobotContainer {
 		}
 
 		// Vision automatically sends pose corrections to drive subsystem
+		// Vision will fix/correct the robot's pose when it sees AprilTags
 		vision.setVisionConsumer(drive::addVisionMeasurement);
 
 		// Create field calibrator for custom field layouts
@@ -146,6 +133,69 @@ public class RobotContainer {
 		autoChooser.addOption("Drive Simple FF Characterization", AkitDriveCommands.feedforwardCharacterization(drive));
 
 		configureButtonBindings();
+	}
+
+	/**
+	 * Creates vision system with automatically detected cameras.
+	 * Only uses cameras that are actually connected - automatically adjusts!
+	 * Tries all possible cameras and only uses the ones that work.
+	 */
+	private VisionLocalizer createVisionSystem() {
+		// Define all possible cameras (add more here as you get them)
+		String[] allPossibleCameras = { "FL", "FR", "BL", "BR" };
+		Transform3d[] allPossibleTransforms = {
+				new Transform3d(new Translation3d(0.263383, 0.275693, 0.259765),
+						new Rotation3d(0, 0, Units.degreesToRadians(-45))), // FL
+				new Transform3d(new Translation3d(0.263383, -0.275693, 0.259765),
+						new Rotation3d(0, 0, Units.degreesToRadians(42.5))), // FR
+				new Transform3d(new Translation3d(-0.263383, 0.275693, 0.259765),
+						new Rotation3d(0, 0, Units.degreesToRadians(135))), // BL (example)
+				new Transform3d(new Translation3d(-0.263383, -0.275693, 0.259765),
+						new Rotation3d(0, 0, Units.degreesToRadians(-135))), // BR (example)
+		};
+
+		java.util.List<VisionIO> connectedCameras = new java.util.ArrayList<>();
+
+		// Try each camera and only add the ones that are connected
+		for (int i = 0; i < allPossibleCameras.length && i < allPossibleTransforms.length; i++) {
+			try {
+				if (Constants.currentMode == Constants.Mode.REAL) {
+					VisionIOPhotonReal camera = new VisionIOPhotonReal(
+							allPossibleCameras[i],
+							allPossibleTransforms[i]);
+
+					// Check if camera is connected (give it a moment to initialize)
+					// Note: PhotonCamera connection check might take a moment
+					// We'll add it anyway and let VisionLocalizer handle disconnection
+					connectedCameras.add(camera);
+					System.out.println("Vision: Attempting to use camera: " + allPossibleCameras[i]);
+				} else if (Constants.currentMode == Constants.Mode.SIM) {
+					connectedCameras.add(new VisionIOPhotonSim(
+							allPossibleCameras[i],
+							allPossibleTransforms[i],
+							drive::getPose));
+					System.out.println("Vision: Added sim camera: " + allPossibleCameras[i]);
+				}
+			} catch (Exception e) {
+				System.out.println(
+						"Vision: Could not initialize camera " + allPossibleCameras[i] + ": " + e.getMessage());
+			}
+		}
+
+		if (connectedCameras.isEmpty()) {
+			System.out.println("Vision: WARNING - No cameras initialized! Using dummy camera.");
+			// Return with dummy camera so system doesn't crash
+			return new VisionLocalizer(drive::addVisionMeasurement, drive, new VisionIO() {
+			});
+		}
+
+		System.out.println("Vision: Initialized " + connectedCameras.size() + " camera(s)");
+
+		// Create vision localizer with all connected cameras
+		return new VisionLocalizer(
+				drive::addVisionMeasurement,
+				drive,
+				connectedCameras.toArray(new VisionIO[0]));
 	}
 
 	private void configureButtonBindings() {

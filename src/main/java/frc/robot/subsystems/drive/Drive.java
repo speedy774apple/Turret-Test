@@ -403,25 +403,36 @@ public class Drive extends SubsystemBase {
 		double angleDifference = Math.abs(visionRobotPoseMeters.getRotation()
 				.minus(currentPose.getRotation()).getRadians());
 
-		// Maximum allowed difference (adjust these thresholds as needed)
-		double MAX_POSITION_DIFFERENCE = 1.5; // meters - reject if vision says robot moved >1.5m
-		double MAX_ANGLE_DIFFERENCE = Math.PI / 3; // ~60 degrees - reject if angle changed >60°
+		// Maximum allowed difference - STRICT to prevent driving issues
+		// Vision corrections that are too different from odometry cause driving
+		// problems
+		// (robot drives diagonal when joystick is straight)
+		double MAX_POSITION_DIFFERENCE = 0.5; // meters - reject if vision says robot moved >0.5m
+		double MAX_ANGLE_DIFFERENCE = Math.PI / 6; // ~30 degrees - reject if angle changed >30°
 
 		// Reject measurements that are too different (likely bad detections)
 		if (positionDifference > MAX_POSITION_DIFFERENCE || angleDifference > MAX_ANGLE_DIFFERENCE) {
-			Logger.recordOutput("Odometry/Layer2_VisionRejected", true);
-			Logger.recordOutput("Odometry/Layer2_VisionRejectionReason",
-					"Too different from odometry: pos=" + positionDifference + "m, angle=" + angleDifference);
+			// Only log when rejected (reduces clutter)
+			Logger.recordOutput("Odometry/VisionRejected", true);
 			return; // Don't apply this measurement
 		}
 
-		// Log vision measurements for Layer 2 testing
-		Logger.recordOutput("Odometry/Layer2_VisionActive", true);
-		Logger.recordOutput("Odometry/Layer2_VisionPose", visionRobotPoseMeters);
-		Logger.recordOutput("Odometry/Layer2_VisionTimestamp", timestampSeconds);
-		Logger.recordOutput("Odometry/Layer2_VisionRejected", false);
-		Logger.recordOutput("Odometry/Layer2_PositionDifference", positionDifference);
-		Logger.recordOutput("Odometry/Layer2_AngleDifference", Math.toDegrees(angleDifference));
+		// Additional check: Only apply vision if it's reasonably close to odometry
+		// This prevents vision from causing driving issues (diagonal movement when
+		// joystick is straight)
+		// Vision should only make small corrections, not large jumps
+		if (positionDifference > 0.3 || angleDifference > Math.PI / 12) { // 30cm or 15° threshold
+			Logger.recordOutput("Odometry/VisionRejected", true);
+			Logger.recordOutput("Odometry/VisionRejectionReason",
+					"Too different: " + String.format("%.2f", positionDifference) + "m, " +
+							String.format("%.1f", Math.toDegrees(angleDifference)) + "°");
+			return; // Don't apply - too different from current pose
+		}
+
+		// ORGANIZED LOGGING - Simple status
+		Logger.recordOutput("Odometry/VisionRejected", false);
+		Logger.recordOutput("Odometry/VisionApplied", true);
+		Logger.recordOutput("Odometry/VisionCorrection", positionDifference); // How much vision corrected
 
 		poseEstimator.addVisionMeasurement(
 				visionRobotPoseMeters, timestampSeconds, visionMeasurementStdDevs);

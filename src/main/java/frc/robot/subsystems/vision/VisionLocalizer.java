@@ -18,6 +18,8 @@ import edu.wpi.first.wpilibj2.command.SubsystemBase;
 import frc.robot.subsystems.drive.Drive;
 import frc.robot.subsystems.drive.GyroIO;
 import frc.robot.subsystems.vision.VisionIO.SingleTagObservation;
+import frc.robot.subsystems.vision.VisionIOPhotonReal;
+import frc.robot.subsystems.vision.VisionIOPhotonSim;
 
 import java.util.LinkedList;
 import java.util.List;
@@ -78,7 +80,15 @@ public class VisionLocalizer extends SubsystemBase {
 		// Initialize disconnected alerts
 		this.disconnectedAlerts = new Alert[io.length];
 		for (int i = 0; i < inputs.length; i++) {
-			disconnectedAlerts[i] = new Alert("Vision camera " + i + " is disconnected.", AlertType.kWarning);
+			String cameraName = "Unknown";
+			if (io[i] instanceof VisionIOPhotonReal) {
+				cameraName = ((VisionIOPhotonReal) io[i]).name;
+			} else if (io[i] instanceof VisionIOPhotonSim) {
+				cameraName = ((VisionIOPhotonSim) io[i]).name;
+			}
+			disconnectedAlerts[i] = new Alert("Vision camera " + cameraName + " (index " + i + ") is disconnected.",
+					AlertType.kWarning);
+			System.out.println("Vision: Initialized camera " + i + " with name: " + cameraName);
 		}
 	}
 
@@ -152,10 +162,55 @@ public class VisionLocalizer extends SubsystemBase {
 		List<Pose3d> allRobotPosesAccepted = new LinkedList<>();
 		List<Pose3d> allRobotPosesRejected = new LinkedList<>();
 
+		// Track overall status
+		boolean anyCameraSeesTags = false;
+		int totalTagsSeen = 0;
+
 		// Loop over cameras
 		for (int cameraIndex = 0; cameraIndex < io.length; cameraIndex++) {
 			// Update disconnected alert
 			disconnectedAlerts[cameraIndex].set(!inputs[cameraIndex].connected);
+
+			// Get camera name for better debugging
+			String cameraName = "Unknown";
+			if (io[cameraIndex] instanceof VisionIOPhotonReal) {
+				cameraName = ((VisionIOPhotonReal) io[cameraIndex]).name;
+			} else if (io[cameraIndex] instanceof VisionIOPhotonSim) {
+				cameraName = ((VisionIOPhotonSim) io[cameraIndex]).name;
+			}
+
+			// ORGANIZED LOGGING - Simple status per camera with NAME
+			boolean seesTags = inputs[cameraIndex].tagIds.length > 0;
+			int numTagsSeen = inputs[cameraIndex].tagIds.length;
+			boolean isConnected = inputs[cameraIndex].connected;
+
+			// Get single tag observation (used for both logging and calibration)
+			VisionIO.SingleTagObservation singleTag = inputs[cameraIndex].latestSingleTagObservation;
+
+			// Main status logs - USE CAMERA NAME so you know which is which!
+			Logger.recordOutput("Vision/" + cameraName + "/Connected", isConnected);
+			Logger.recordOutput("Vision/" + cameraName + "/SeesTags", seesTags);
+			Logger.recordOutput("Vision/Camera" + cameraIndex + "/Name", cameraName); // Also keep index for
+																						// compatibility
+
+			if (seesTags) {
+				anyCameraSeesTags = true;
+				totalTagsSeen += numTagsSeen;
+
+				// Only log details when tags are actually seen (reduces clutter)
+				Logger.recordOutput("Vision/" + cameraName + "/TagIDs", inputs[cameraIndex].tagIds);
+				Logger.recordOutput("Vision/Camera" + cameraIndex + "/TagIDs", inputs[cameraIndex].tagIds); // Keep for
+																											// compatibility
+
+				// Single tag details (if applicable)
+				if (singleTag.tagId() > 0) {
+					Logger.recordOutput("Vision/" + cameraName + "/TagID", singleTag.tagId());
+					Logger.recordOutput("Vision/" + cameraName + "/TagDistance", singleTag.distance3D());
+				}
+			} else if (!isConnected) {
+				// Log when camera is disconnected so you know why it's not seeing tags
+				Logger.recordOutput("Vision/" + cameraName + "/Status", "DISCONNECTED");
+			}
 
 			// Initialize logging values
 			List<Pose3d> robotPoses = new LinkedList<>();
@@ -174,7 +229,7 @@ public class VisionLocalizer extends SubsystemBase {
 				Transform3d robotToCamera = VisionConstants.vehicleToCameras[cameraIndex];
 
 				// Process single tag observations for calibration
-				VisionIO.SingleTagObservation singleTag = inputs[cameraIndex].latestSingleTagObservation;
+				// (singleTag already declared above for logging)
 				if (singleTag.tagId() > 0 && singleTag.distance3D() > 0) {
 					// Calculate camera-to-tag transform from observation
 					// We have: distance, angles (tx, ty)
@@ -203,8 +258,19 @@ public class VisionLocalizer extends SubsystemBase {
 				}
 			}
 
+			// Process all pose observations from this camera
+			// PhotonVision processes the FULL camera feed to detect tags and calculate pose
+			// When multiple tags are visible, it uses all of them together for better
+			// accuracy
 			for (VisionIO.PoseObservation observation : inputs[cameraIndex].poseObservations) {
 				robotPoses.add(observation.pose());
+
+				// Enhanced field understanding:
+				// - Multitag results use the full camera view and multiple tags for better
+				// accuracy
+				// - Single tag results use one tag but still process the full camera feed
+				// - The camera feed is continuously analyzed for tag detection
+
 				if (shouldRejectPose(observation)) {
 					robotPosesRejected.add(observation.pose());
 					continue;
@@ -212,6 +278,12 @@ public class VisionLocalizer extends SubsystemBase {
 
 				robotPosesAccepted.add(observation.pose());
 
+				// Send pose estimate to drive subsystem
+				// This uses the full camera feed analysis from PhotonVision:
+				// - Distance measurements from camera to tags
+				// - Angle measurements (tx, ty) from camera view
+				// - Multiple tag fusion when available (multitag)
+				// - All calculated from the full camera feed processing
 				consumer.accept(
 						observation.pose().toPose2d(),
 						observation.timestamp(),
@@ -225,6 +297,10 @@ public class VisionLocalizer extends SubsystemBase {
 		}
 
 		logSummaryData(allRobotPoses, allRobotPosesAccepted, allRobotPosesRejected);
+
+		// ORGANIZED SUMMARY - One simple log to check
+		Logger.recordOutput("Vision/SeesTags", anyCameraSeesTags);
+		Logger.recordOutput("Vision/TotalTagsSeen", totalTagsSeen);
 	}
 
 	/** sets a VisionConsumer for the vision to send estimates to */
@@ -298,16 +374,31 @@ public class VisionLocalizer extends SubsystemBase {
 				* Math.pow(avgDistanceFromTarget, 2)
 				/ numTags;
 
+		// Enhanced field understanding from full camera feed:
+		// - PhotonVision processes the ENTIRE camera feed frame-by-frame
+		// - It detects all visible AprilTags and calculates distances/angles
+		// - Multitag results use multiple tags together for better accuracy
+		// - This gives the robot full field understanding through camera analysis
+
 		// Increase uncertainty for single tags (they're less reliable)
 		// Single tags can have ambiguity issues, so we trust them less
 		if (numTags == 1) {
 			linearStdDev *= 2.0; // Double uncertainty for single tags
 			angularStdDev *= 2.5; // Even more uncertainty for angle with single tags
+		} else {
+			// Multitag results are more accurate because:
+			// - Uses full camera feed with multiple tags visible
+			// - PhotonVision fuses all tag positions from the camera view
+			// - Better distance/angle measurements from analyzing entire frame
+			// - More reliable pose estimation from field understanding
+			linearStdDev *= 0.9; // 10% better accuracy with multitag
+			angularStdDev *= 0.85; // 15% better angle accuracy with multitag
 		}
 
 		// Ensure minimum uncertainty (don't trust vision too much)
-		linearStdDev = Math.max(linearStdDev, 0.05); // At least 5cm uncertainty
-		angularStdDev = Math.max(angularStdDev, 0.05); // At least 0.05 rad (~3°) uncertainty
+		// Increased to prevent aggressive corrections that cause driving issues
+		linearStdDev = Math.max(linearStdDev, 0.15); // At least 15cm uncertainty (was 5cm)
+		angularStdDev = Math.max(angularStdDev, 0.1); // At least 0.1 rad (~6°) uncertainty (was 3°)
 
 		// Cap maximum uncertainty (don't make it useless)
 		linearStdDev = Math.min(linearStdDev, 0.5); // Max 50cm uncertainty

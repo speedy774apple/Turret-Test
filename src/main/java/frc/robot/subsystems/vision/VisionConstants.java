@@ -18,7 +18,7 @@ public final class VisionConstants {
 
 	public static final String[] cameraNames = {
 			"FL",
-			"FR",
+			// "FR", // Uncomment when you add second camera
 			// "BL",
 			// "BR"
 	};
@@ -26,14 +26,17 @@ public final class VisionConstants {
 	public static final Transform3d[] vehicleToCameras = {
 			new Transform3d(new Translation3d(0.263383, 0.275693, 0.259765),
 					new Rotation3d(0, 0, Units.degreesToRadians(-45))), // FL
-			new Transform3d(new Translation3d(0.263383, -0.275693, 0.259765),
-					new Rotation3d(0, 0, Units.degreesToRadians(42.5))), // FR
+			// Uncomment when you add second camera:
+			// new Transform3d(new Translation3d(0.263383, -0.275693, 0.259765),
+			// new Rotation3d(0, 0, Units.degreesToRadians(42.5))), // FR
 			// Add additional cameras here
 	};
 
 	public static final List<CameraParams> cameras = List.of(
-			new CameraParams(cameraNames[0], vehicleToCameras[0]),
-			new CameraParams(cameraNames[1], vehicleToCameras[1]));
+			new CameraParams(cameraNames[0], vehicleToCameras[0])
+	// Add more cameras here when you have them:
+	// new CameraParams(cameraNames[1], vehicleToCameras[1])
+	);
 
 	// Field Layout for visual localization and map generation
 	// Default: Standard 2025 FRC field
