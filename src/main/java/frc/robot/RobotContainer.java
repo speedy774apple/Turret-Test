@@ -120,9 +120,12 @@ public class RobotContainer {
 		//
 		// ===================================================================
 
-		// Initialize robot pose at starting position
-		// Comment out this line to start at blue alliance origin (0, 0)
-		drive.setPose(new Pose2d(3.181, 3.960, new Rotation2d()));
+		// Initialize robot pose at origin - vision will set the actual position when it
+		// sees tags
+		// Vision can now set the initial position automatically based on AprilTag
+		// detections
+		// drive.setPose(new Pose2d(3.181, 3.960, new Rotation2d())); // Removed - let
+		// vision set initial pose
 
 		// ... NamedCommands registration (unchanged)
 

@@ -273,6 +273,11 @@ public class VisionLocalizer extends SubsystemBase {
 
 				if (shouldRejectPose(observation)) {
 					robotPosesRejected.add(observation.pose());
+					Logger.recordOutput("Vision/" + cameraName + "/PoseRejected", true);
+					Logger.recordOutput("Vision/" + cameraName + "/RejectionReason",
+							"TagCount: " + observation.tagCount() +
+									", Distance: " + String.format("%.2f", observation.averageTagDistance()) +
+									", Ambiguity: " + String.format("%.3f", observation.ambiguity()));
 					continue;
 				}
 
@@ -284,10 +289,24 @@ public class VisionLocalizer extends SubsystemBase {
 				// - Angle measurements (tx, ty) from camera view
 				// - Multiple tag fusion when available (multitag)
 				// - All calculated from the full camera feed processing
-				consumer.accept(
-						observation.pose().toPose2d(),
-						observation.timestamp(),
-						getLatestVariance(observation, cameraIndex));
+				if (consumer != null) {
+					Pose2d visionPose = observation.pose().toPose2d();
+					Matrix<N3, N1> variance = getLatestVariance(observation, cameraIndex);
+
+					// Log that we're sending vision data (diagnostic only)
+					// The actual combined pose (odometry + vision) is logged as "Odometry/Robot"
+					Logger.recordOutput("Vision/" + cameraName + "/SendingToDrive", true);
+					Logger.recordOutput("Vision/" + cameraName + "/DiagnosticVisionPose", visionPose);
+					Logger.recordOutput("Vision/" + cameraName + "/TagCount", observation.tagCount());
+					Logger.recordOutput("Vision/" + cameraName + "/Timestamp", observation.timestamp());
+
+					consumer.accept(visionPose, observation.timestamp(), variance);
+				} else {
+					Logger.recordOutput("Vision/" + cameraName + "/Error",
+							"Consumer is null - vision data not being sent!");
+					System.err.println(
+							"Vision ERROR: Consumer is null! Vision data is not being sent to drive subsystem.");
+				}
 			}
 			logCameraData(cameraIndex, robotPoses, robotPosesAccepted, robotPosesRejected);
 
@@ -301,6 +320,9 @@ public class VisionLocalizer extends SubsystemBase {
 		// ORGANIZED SUMMARY - One simple log to check
 		Logger.recordOutput("Vision/SeesTags", anyCameraSeesTags);
 		Logger.recordOutput("Vision/TotalTagsSeen", totalTagsSeen);
+		Logger.recordOutput("Vision/TotalPosesAccepted", allRobotPosesAccepted.size());
+		Logger.recordOutput("Vision/TotalPosesRejected", allRobotPosesRejected.size());
+		Logger.recordOutput("Vision/ConsumerSet", consumer != null);
 	}
 
 	/** sets a VisionConsumer for the vision to send estimates to */
@@ -337,16 +359,21 @@ public class VisionLocalizer extends SubsystemBase {
 	 *         out of field
 	 */
 	private boolean shouldRejectPose(VisionIO.PoseObservation observation) {
+		// Get field dimensions
+		double fieldLength = VisionConstants.getActiveLayout().getFieldLength();
+		double fieldWidth = VisionConstants.getActiveLayout().getFieldWidth();
+
+		// Allow 1.5m margin outside field for measurement uncertainty and edge cases
+		// This prevents rejecting valid poses near field boundaries
 		return observation.tagCount() == 0 // Must have at least one tag
-				// single tag
 				|| Math.abs(observation.pose().getZ()) > 1.0 // Must have realistic Z coordinate
-				|| observation.averageTagDistance() > 10
-				|| observation.ambiguity() > 0.16
-				// Must be within the field boundaries
-				|| observation.pose().getX() < 0.0
-				|| observation.pose().getX() > VisionConstants.aprilTagLayout.getFieldLength()
-				|| observation.pose().getY() < 0.0
-				|| observation.pose().getY() > VisionConstants.aprilTagLayout.getFieldWidth();
+				|| observation.averageTagDistance() > 10 // Tags too far away
+				|| observation.ambiguity() > 0.2 // Increased from 0.16 to 0.2 for more lenient ambiguity check
+				// Must be within reasonable field boundaries (with margin)
+				|| observation.pose().getX() < -1.5
+				|| observation.pose().getX() > fieldLength + 1.5
+				|| observation.pose().getY() < -1.5
+				|| observation.pose().getY() > fieldWidth + 1.5;
 		// || Math.abs(drive.getHeading().getDegrees()
 		// - Units.radiansToDegrees(observation.pose().getRotation().getAngle())) > 2;
 	}
@@ -396,9 +423,10 @@ public class VisionLocalizer extends SubsystemBase {
 		}
 
 		// Ensure minimum uncertainty (don't trust vision too much)
-		// Increased to prevent aggressive corrections that cause driving issues
-		linearStdDev = Math.max(linearStdDev, 0.15); // At least 15cm uncertainty (was 5cm)
-		angularStdDev = Math.max(angularStdDev, 0.1); // At least 0.1 rad (~6°) uncertainty (was 3°)
+		// Reduced to allow vision to correct odometry drift more effectively
+		// With 2 cameras and good tag detection, we can trust vision more
+		linearStdDev = Math.max(linearStdDev, 0.08); // At least 8cm uncertainty (was 15cm)
+		angularStdDev = Math.max(angularStdDev, 0.05); // At least 0.05 rad (~3°) uncertainty (was 6°)
 
 		// Cap maximum uncertainty (don't make it useless)
 		linearStdDev = Math.min(linearStdDev, 0.5); // Max 50cm uncertainty
@@ -425,15 +453,17 @@ public class VisionLocalizer extends SubsystemBase {
 			List<Pose3d> robotPoses,
 			List<Pose3d> robotPosesAccepted,
 			List<Pose3d> robotPosesRejected) {
-		// Log camera datadata
+		// Log camera diagnostic data (not for robot visualization)
+		// The main robot visualization uses "Odometry/Robot" which combines odometry +
+		// vision
 		Logger.recordOutput(
-				"Vision/Camera" + cameraIndex + "/RobotPoses",
+				"Vision/Camera" + cameraIndex + "/DiagnosticPoses",
 				robotPoses.toArray(new Pose3d[robotPoses.size()]));
 		Logger.recordOutput(
-				"Vision/Camera" + cameraIndex + "/RobotPosesAccepted",
+				"Vision/Camera" + cameraIndex + "/DiagnosticPosesAccepted",
 				robotPosesAccepted.toArray(new Pose3d[robotPosesAccepted.size()]));
 		Logger.recordOutput(
-				"Vision/Camera" + cameraIndex + "/RobotPosesRejected",
+				"Vision/Camera" + cameraIndex + "/DiagnosticPosesRejected",
 				robotPosesRejected.toArray(new Pose3d[robotPosesRejected.size()]));
 	}
 
@@ -451,14 +481,17 @@ public class VisionLocalizer extends SubsystemBase {
 			List<Pose3d> allRobotPoses,
 			List<Pose3d> allRobotPosesAccepted,
 			List<Pose3d> allRobotPosesRejected) {
+		// Log diagnostic data (not for robot visualization)
+		// The main robot visualization uses "Odometry/Robot" which combines odometry +
+		// vision
 		Logger.recordOutput(
-				"Vision/Summary/RobotPoses",
+				"Vision/Summary/DiagnosticPoses",
 				allRobotPoses.toArray(new Pose3d[allRobotPoses.size()]));
 		Logger.recordOutput(
-				"Vision/Summary/RobotPosesAccepted",
+				"Vision/Summary/DiagnosticPosesAccepted",
 				allRobotPosesAccepted.toArray(new Pose3d[allRobotPosesAccepted.size()]));
 		Logger.recordOutput(
-				"Vision/Summary/RobotPosesRejected",
+				"Vision/Summary/DiagnosticPosesRejected",
 				allRobotPosesRejected.toArray(new Pose3d[allRobotPosesRejected.size()]));
 	}
 

@@ -16,13 +16,34 @@ public final class VisionConstants {
 			Transform3d transforms) {
 	};
 
+	// ===================================================================
+	// CAMERA CONFIGURATION (ROBOT-SPECIFIC - NOT GAME-SPECIFIC)
+	// ===================================================================
+	// These are where YOUR cameras are mounted on YOUR robot.
+	// Only update these if you change camera positions on the robot.
+	// These stay the same across different games (unlike GameConstants.java)
+	// ===================================================================
+
+	/** Camera names - must match PhotonVision camera names exactly */
 	public static final String[] cameraNames = {
 			"FL",
-			// "FR", // Uncomment when you add second camera
-			// "BL",
-			// "BR"
+			"FR", // Uncomment when you add second camera
+			"BL",
+			"BR"
 	};
 
+	/**
+	 * Camera mounting positions on robot (robot-to-camera transforms).
+	 * Format: Translation3d(x, y, z), Rotation3d(roll, pitch, yaw)
+	 * 
+	 * Coordinate system:
+	 * - X: Forward (positive = front of robot)
+	 * - Y: Left (positive = left side of robot)
+	 * - Z: Up (positive = above robot)
+	 * 
+	 * Current values are examples - UPDATE THESE to match YOUR robot's camera
+	 * positions!
+	 */
 	public static final Transform3d[] vehicleToCameras = {
 			new Transform3d(new Translation3d(0.263383, 0.275693, 0.259765),
 					new Rotation3d(0, 0, Units.degreesToRadians(-45))), // FL
@@ -39,10 +60,9 @@ public final class VisionConstants {
 	);
 
 	// Field Layout for visual localization and map generation
-	// Default: Standard 2025 FRC field
+	// Uses GameConstants.APRILTAG_LAYOUT (game-specific, see GameConstants.java)
 	// Can be replaced with custom layout from TagFieldCalibrator
-	public static AprilTagFieldLayout aprilTagLayout = AprilTagFieldLayout
-			.loadField(AprilTagFields.k2025ReefscapeAndyMark);
+	public static AprilTagFieldLayout aprilTagLayout = frc.robot.util.GameConstants.APRILTAG_LAYOUT;
 
 	// Custom field layout (set by TagFieldCalibrator after calibration)
 	private static AprilTagFieldLayout customLayout = null;

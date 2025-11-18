@@ -202,10 +202,10 @@ public class TagFieldCalibrator extends SubsystemBase {
 			return null;
 		}
 
-		// Create field layout (we'll use standard field dimensions for now)
-		// You can adjust these based on your actual field size
-		double fieldLength = 16.54; // meters (standard FRC field)
-		double fieldWidth = 8.21; // meters
+		// Create field layout with game-specific field dimensions
+		// Uses GameConstants (game-specific, see GameConstants.java)
+		double fieldLength = frc.robot.util.GameConstants.FIELD_LENGTH;
+		double fieldWidth = frc.robot.util.GameConstants.FIELD_WIDTH;
 
 		return new AprilTagFieldLayout(tags, fieldLength, fieldWidth);
 	}

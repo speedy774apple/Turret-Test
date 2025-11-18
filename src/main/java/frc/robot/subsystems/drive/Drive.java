@@ -115,6 +115,10 @@ public class Drive extends SubsystemBase {
 	private SwerveDrivePoseEstimator poseEstimator = new SwerveDrivePoseEstimator(kinematics, rawGyroRotation,
 			lastModulePositions, new Pose2d());
 
+	// Track when we last received a vision measurement to allow larger corrections
+	// if odometry has drifted
+	private double lastVisionTimestamp = 0.0;
+
 	private final SwerveSetpointGenerator setpointGenerator;
 	private SwerveSetpoint previousSetpoint;
 
@@ -239,17 +243,12 @@ public class Drive extends SubsystemBase {
 			poseEstimator.updateWithTime(sampleTimestamps[i], rawGyroRotation, modulePositions);
 		}
 
-		// Log odometry diagnostics for layer testing
-		// This helps you see what Layer 1 (Wheel Odometry) is doing
-		Logger.recordOutput("Odometry/Layer1_WheelOdometry", getPose());
+		// Log diagnostic data (not for visualization - these are just numbers)
+		// The main robot visualization uses "Odometry/Robot" which is logged via
+		// @AutoLogOutput
+		// This is the COMBINED pose estimate (odometry + vision corrections)
 		Logger.recordOutput("Odometry/Layer1_GyroAngle", rawGyroRotation.getDegrees());
 		Logger.recordOutput("Odometry/Layer1_ModulePositions", currentModulePositions);
-
-		// Log if vision corrections are being applied (Layer 2)
-		// This tracks when vision measurements are actually received
-		// Note: This is set to true in addVisionMeasurement() when vision sends
-		// corrections
-		Logger.recordOutput("Odometry/Layer2_VisionActive", false); // Updated in addVisionMeasurement()
 
 		// Update gyro alert
 		gyroDisconnectedAlert.set(!gyroInputs.connected && Constants.currentMode != Mode.SIM);
@@ -403,39 +402,80 @@ public class Drive extends SubsystemBase {
 		double angleDifference = Math.abs(visionRobotPoseMeters.getRotation()
 				.minus(currentPose.getRotation()).getRadians());
 
-		// Maximum allowed difference - STRICT to prevent driving issues
-		// Vision corrections that are too different from odometry cause driving
-		// problems
-		// (robot drives diagonal when joystick is straight)
-		double MAX_POSITION_DIFFERENCE = 0.5; // meters - reject if vision says robot moved >0.5m
-		double MAX_ANGLE_DIFFERENCE = Math.PI / 6; // ~30 degrees - reject if angle changed >30°
+		// Check if robot is at origin (likely initial position before vision sets it)
+		// Allow larger differences when at origin so vision can set initial pose
+		boolean isAtOrigin = currentPose.getTranslation().getDistance(new Translation2d(0, 0)) < 0.1
+				&& Math.abs(currentPose.getRotation().getRadians()) < 0.1;
 
-		// Reject measurements that are too different (likely bad detections)
-		if (positionDifference > MAX_POSITION_DIFFERENCE || angleDifference > MAX_ANGLE_DIFFERENCE) {
-			// Only log when rejected (reduces clutter)
-			Logger.recordOutput("Odometry/VisionRejected", true);
-			return; // Don't apply this measurement
+		// Calculate time since last vision update
+		// If it's been a while, odometry may have drifted significantly - allow larger
+		// corrections
+		double timeSinceLastVision = timestampSeconds - lastVisionTimestamp;
+		boolean hasRecentVision = timeSinceLastVision < 2.0; // Less than 2 seconds since last vision
+
+		// Maximum allowed difference - more lenient when:
+		// 1. At origin (initial positioning)
+		// 2. No recent vision updates (odometry has likely drifted)
+		// This allows vision to correct for wheel slip and odometry drift
+		double MAX_POSITION_DIFFERENCE;
+		double MAX_ANGLE_DIFFERENCE;
+
+		if (isAtOrigin) {
+			// At origin - allow any position/angle for initial setup
+			MAX_POSITION_DIFFERENCE = 10.0;
+			MAX_ANGLE_DIFFERENCE = Math.PI;
+		} else if (!hasRecentVision) {
+			// No recent vision - odometry has likely drifted, allow larger corrections
+			// This is the KEY FIX: after wheel slip, we need to allow vision to correct
+			MAX_POSITION_DIFFERENCE = 5.0; // Allow up to 5m correction (was 2m)
+			MAX_ANGLE_DIFFERENCE = Math.PI / 2; // Allow up to 90° correction (was 60°)
+		} else {
+			// Recent vision updates - odometry should be accurate, be more strict
+			MAX_POSITION_DIFFERENCE = 3.0; // Allow up to 3m correction
+			MAX_ANGLE_DIFFERENCE = Math.PI / 3; // Allow up to 60° correction
 		}
 
-		// Additional check: Only apply vision if it's reasonably close to odometry
-		// This prevents vision from causing driving issues (diagonal movement when
-		// joystick is straight)
-		// Vision should only make small corrections, not large jumps
-		if (positionDifference > 0.3 || angleDifference > Math.PI / 12) { // 30cm or 15° threshold
+		// Reject measurements that are extremely different (likely bad detections)
+		// Only reject truly impossible measurements (beyond field bounds, etc.)
+		if (positionDifference > MAX_POSITION_DIFFERENCE || angleDifference > MAX_ANGLE_DIFFERENCE) {
 			Logger.recordOutput("Odometry/VisionRejected", true);
 			Logger.recordOutput("Odometry/VisionRejectionReason",
 					"Too different: " + String.format("%.2f", positionDifference) + "m, " +
-							String.format("%.1f", Math.toDegrees(angleDifference)) + "°");
-			return; // Don't apply - too different from current pose
+							String.format("%.1f", Math.toDegrees(angleDifference)) + "°" +
+							" (max: " + String.format("%.2f", MAX_POSITION_DIFFERENCE) + "m, " +
+							String.format("%.1f", Math.toDegrees(MAX_ANGLE_DIFFERENCE)) + "°)");
+			return; // Don't apply this measurement
+		}
+
+		// Additional validation: Check if vision pose is within reasonable field bounds
+		// This catches truly bad detections (robot appears way off field)
+		// Use actual field dimensions from VisionConstants
+		double fieldLength = VisionConstants.aprilTagLayout.getFieldLength();
+		double fieldWidth = VisionConstants.aprilTagLayout.getFieldWidth();
+		// Allow 2m margin outside field for measurement uncertainty
+		if (visionRobotPoseMeters.getX() < -2.0 || visionRobotPoseMeters.getX() > fieldLength + 2.0 ||
+				visionRobotPoseMeters.getY() < -2.0 || visionRobotPoseMeters.getY() > fieldWidth + 2.0) {
+			Logger.recordOutput("Odometry/VisionRejected", true);
+			Logger.recordOutput("Odometry/VisionRejectionReason",
+					"Pose way out of field bounds: (" + String.format("%.2f", visionRobotPoseMeters.getX()) + ", " +
+							String.format("%.2f", visionRobotPoseMeters.getY()) + ")");
+			return;
 		}
 
 		// ORGANIZED LOGGING - Simple status
 		Logger.recordOutput("Odometry/VisionRejected", false);
 		Logger.recordOutput("Odometry/VisionApplied", true);
 		Logger.recordOutput("Odometry/VisionCorrection", positionDifference); // How much vision corrected
+		Logger.recordOutput("Odometry/Layer2_VisionActive", true); // Mark vision as active
+		Logger.recordOutput("Odometry/TimeSinceLastVision", timeSinceLastVision);
+		Logger.recordOutput("Odometry/DiagnosticVisionPose", visionRobotPoseMeters); // Diagnostic only - not for
+																						// visualization
 
 		poseEstimator.addVisionMeasurement(
 				visionRobotPoseMeters, timestampSeconds, visionMeasurementStdDevs);
+
+		// Update last vision timestamp
+		lastVisionTimestamp = timestampSeconds;
 	}
 
 	/** Returns the maximum linear speed in meters per sec. */
