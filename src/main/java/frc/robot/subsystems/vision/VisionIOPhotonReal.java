@@ -1,4 +1,3 @@
-
 package frc.robot.subsystems.vision;
 
 import edu.wpi.first.apriltag.AprilTagFieldLayout;
@@ -11,7 +10,6 @@ import java.util.List;
 import java.util.Set;
 import org.photonvision.PhotonCamera;
 import org.photonvision.PhotonUtils;
-import edu.wpi.first.cameraserver.CameraServer;
 
 /** This class implements io using photon vision */
 public class VisionIOPhotonReal implements VisionIO {
@@ -33,20 +31,6 @@ public class VisionIOPhotonReal implements VisionIO {
 		this.name = name;
 		this.robotToCamera = robotToCamera;
 		this.aprilTagLayout = null;
-
-		// Enable camera streaming so you can see the field view
-		// The camera feed will be available in PhotonVision web interface
-		// and can be viewed on Driver Station
-		try {
-			// PhotonVision automatically streams cameras, but we can also add to
-			// CameraServer
-			// for viewing in Driver Station. Note: This requires the camera to be
-			// accessible
-			// via USB. PhotonVision handles the streaming automatically.
-			System.out.println("Vision: Camera '" + name + "' initialized. View feed in PhotonVision web interface.");
-		} catch (Exception e) {
-			System.out.println("Vision: Warning - Could not initialize camera stream for " + name);
-		}
 	}
 
 	/**

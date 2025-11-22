@@ -21,7 +21,6 @@ import frc.robot.subsystems.vision.*;
 public class RobotContainer {
 	private final Drive drive;
 	private final VisionLocalizer vision;
-	private final TagFieldCalibrator fieldCalibrator;
 
 	private final CommandXboxController controller = new CommandXboxController(0);
 	private final LoggedDashboardChooser<Command> autoChooser;
@@ -73,11 +72,6 @@ public class RobotContainer {
 		// Vision automatically sends pose corrections to drive subsystem
 		// Vision will fix/correct the robot's pose when it sees AprilTags
 		vision.setVisionConsumer(drive::addVisionMeasurement);
-
-		// Create field calibrator for custom field layouts
-		// This allows the robot to adapt to ANY field configuration!
-		fieldCalibrator = new TagFieldCalibrator(drive, vision);
-		vision.setCalibrator(fieldCalibrator);
 
 		// ===================================================================
 		// HOW ROBOT POSITION TRACKING WORKS (Automatic AprilTag Localization)
@@ -216,27 +210,6 @@ public class RobotContainer {
 								new Pose2d(drive.getPose().getTranslation(), new Rotation2d())),
 						drive)
 						.ignoringDisable(true));
-
-		// Field calibration controls
-		// Y button - Start calibration (drive around to collect tag positions)
-		controller.y().onTrue(Commands.runOnce(() -> {
-			fieldCalibrator.startCalibration();
-			System.out.println("Field calibration started! Drive around to collect tag positions.");
-		}));
-
-		// B button - Finish calibration (builds custom field layout)
-		controller.b().onTrue(Commands.runOnce(() -> {
-			boolean success = fieldCalibrator.finishCalibration();
-			if (success) {
-				fieldCalibrator.getCustomLayout().ifPresent(layout -> {
-					VisionConstants.setCustomLayout(layout);
-					vision.updateFieldLayout();
-					System.out.println("Field calibration complete! Custom layout is now active.");
-				});
-			} else {
-				System.out.println("Calibration failed - not enough observations collected.");
-			}
-		}));
 	}
 
 	public void teleopInit() {

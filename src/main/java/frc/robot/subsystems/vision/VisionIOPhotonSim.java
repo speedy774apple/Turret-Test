@@ -15,6 +15,7 @@ public class VisionIOPhotonSim extends VisionIOPhotonReal {
 	private static VisionSystemSim visionSim;
 
 	private final Supplier<Pose2d> poseSupplier;
+
 	private final PhotonCameraSim cameraSim;
 
 	/**
